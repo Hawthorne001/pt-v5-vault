@@ -7,27 +7,28 @@ import { BaseIntegration, IERC20, IERC4626 } from "../BaseIntegration.t.sol";
 
 /**
  * Issues Found:
- * - stETH has an issue where transferring a rebasing balance can sometimes result in a 1 or 2 wei rounding error in
+ * - OETH has an issue where transferring a rebasing balance can sometimes result in a 1 or 2 wei rounding error in
  *   the receiver's resulting balance. For example, the `Transfer` event records 1e18, but the resulting balance is 
  *   1e18 - 1. This shouldn't cause any issues in the prize vault since it's built to deal with small rounding errors, 
  *   but it may cause issues with integrations built on top of the prize vault since it may receive less tokens than
- *   expected during a withdraw or redeem. (https://github.com/lidofinance/lido-dao/issues/442)
+ *   expected during a withdraw or redeem. (https://github.com/OriginProtocol/origin-dollar/issues/1411#issuecomment-1536546728)
  */
 
-contract YieldDaddyLidoEthereumIntegrationTest is BaseIntegration {
+contract SuperOriginEthBaseIntegrationTest is BaseIntegration {
     uint256 fork;
-    uint256 forkBlock = 20636046;
-    uint256 forkBlockTimestamp = 1724956295;
+    uint256 forkBlock = 19914759;
+    uint256 forkBlockTimestamp = 1726633265;
 
-    address internal _asset = address(0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84);
-    address internal _assetWhale = address(0x93c4b944D05dfe6df7645A86cd2206016c51564D);
-    address internal _yieldVault = address(0xF9A98A9452485ed55cd3Ce5260C2b71c9807b11a);
+    address internal _asset = address(0xDBFeFD2e8460a6Ee4955A68582F85708BAEA60A3);
+    address internal _assetWhale = address(0x86D888C3fA8A7F67452eF2Eccc1C5EE9751Ec8d6);
+    address internal _yieldVault = address(0x7FcD174E80f264448ebeE8c88a7C4476AAF58Ea6);
 
+    address internal _dripper = address(0x02f2C609950E90934ce99e58b4d7326aD0d7f8d6);
 
     /* ============ setup ============ */
 
     function setUpUnderlyingAsset() public virtual override returns (IERC20 asset, uint8 decimals, uint256 approxAssetUsdExchangeRate) {
-        return (IERC20(_asset), 18, 3800e18); // approx 1 stETH for $3800
+        return (IERC20(_asset), 18, 3800e18); // approx 1 OETH for $3800
     }
 
     function setUpYieldVault() public virtual override returns (IERC4626) {
@@ -35,15 +36,15 @@ contract YieldDaddyLidoEthereumIntegrationTest is BaseIntegration {
     }
 
     function setUpFork() public virtual override {
-        fork = vm.createFork(vm.rpcUrl("mainnet"), forkBlock);
+        fork = vm.createFork(vm.rpcUrl("base"), forkBlock);
         vm.selectFork(fork);
         vm.warp(forkBlockTimestamp);
     }
 
     function beforeSetup() public virtual override {
-        lowGasPriceEstimate = 3 gwei;
+        lowGasPriceEstimate = 0.5 gwei;
         assetPrecisionLoss = 1; // loses 1 decimal of precision due to extra 1-wei rounding errors on transfer
-        roundingErrorOnTransfer = 2; // loses 1-2 wei on asset transfer
+        roundingErrorOnTransfer = 1; // loses 1 wei on asset transfer
     }
 
     function afterSetup() public virtual override { }
@@ -60,20 +61,16 @@ contract YieldDaddyLidoEthereumIntegrationTest is BaseIntegration {
         underlyingAsset.transfer(to, amount);
     }
 
-    /// @dev Accrues yield by mocking the stETH total supply to be higher than it is
-    function _accrueYield() internal virtual override prankception(_assetWhale) {
-        (bool success, bytes memory data) = _asset.call(abi.encodeWithSignature("totalSupply()"));
-        uint256 currentTotalSupply = abi.decode(data, (uint256));
-        require(success, "failed to get totalSupply");
-        vm.mockCall(_asset, abi.encodeWithSignature("totalSupply()"), abi.encode((currentTotalSupply * 1001) / 1000)); // 0.1% yield
+    /// @dev Accrues yield by letting time pass and calling the dripper
+    function _accrueYield() internal virtual override {
+        vm.warp(block.timestamp + 1 days);
+        (bool success,) = _dripper.call(abi.encodeWithSignature("collectAndRebase()"));
+        require(success, "drip not successful");
     }
 
-    /// @dev Loss simulated by mocking the stETH totalSupply to be lower than it is
+    /// @dev Loss simulated by transferring assets out of the yield vault
     function _simulateLoss() internal virtual override prankception(_yieldVault) {
-        (bool success, bytes memory data) = _asset.call(abi.encodeWithSignature("totalSupply()"));
-        uint256 currentTotalSupply = abi.decode(data, (uint256));
-        require(success, "failed to get totalSupply");
-        vm.mockCall(_asset, abi.encodeWithSignature("totalSupply()"), abi.encode(currentTotalSupply / 2)); // 50% loss
+        IERC20(_asset).transfer(_assetWhale, IERC4626(_yieldVault).totalAssets() / 2); // 50% loss
     }
 
 }
